@@ -14,6 +14,9 @@ const minKeysPerPage = 2
 const branchPageElementSize = unsafe.Sizeof(branchPageElement{})
 const leafPageElementSize = unsafe.Sizeof(leafPageElement{})
 
+// hash size of given entry， 256 = 32 bytes
+const hashSize = 32
+
 const (
 	branchPageFlag   = 0x01
 	leafPageFlag     = 0x02
@@ -101,9 +104,10 @@ func (s pages) Less(i, j int) bool { return s[i].id < s[j].id }
 
 // branchPageElement represents a node on a branch page.
 type branchPageElement struct {
-	pos   uint32
-	ksize uint32
-	pgid  pgid
+	pos      uint32
+	ksize    uint32
+	hashsize uint32
+	pgid     pgid
 }
 
 // key returns a byte slice of the node key.
@@ -111,12 +115,17 @@ func (n *branchPageElement) key() []byte {
 	return unsafeByteSlice(unsafe.Pointer(n), 0, int(n.pos), int(n.pos)+int(n.ksize))
 }
 
+func (n *branchPageElement) hash() []byte {
+	return unsafeByteSlice(unsafe.Pointer(n), 0, int(n.pos)+int(n.ksize), int(n.pos)+int(n.ksize)+int(n.hashsize))
+}
+
 // leafPageElement represents a node on a leaf page.
 type leafPageElement struct {
-	flags uint32
-	pos   uint32
-	ksize uint32
-	vsize uint32
+	flags    uint32
+	pos      uint32
+	ksize    uint32
+	vsize    uint32
+	hashsize uint32
 }
 
 // key returns a byte slice of the node key.
@@ -130,6 +139,12 @@ func (n *leafPageElement) key() []byte {
 func (n *leafPageElement) value() []byte {
 	i := int(n.pos) + int(n.ksize)
 	j := i + int(n.vsize)
+	return unsafeByteSlice(unsafe.Pointer(n), 0, i, j)
+}
+
+func (n *leafPageElement) hash() []byte {
+	i := int(n.pos) + int(n.ksize) + int(n.vsize)
+	j := i + int(n.hashsize)
 	return unsafeByteSlice(unsafe.Pointer(n), 0, i, j)
 }
 

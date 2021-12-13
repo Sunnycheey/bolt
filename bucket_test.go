@@ -2,6 +2,7 @@ package bbolt_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1960,4 +1961,42 @@ func ExampleBucket_ForEach() {
 	// A cat is lame.
 	// A dog is fun.
 	// A liger is awesome.
+}
+
+func TestBucket_GetRootHash(t *testing.T) {
+	db := MustOpenDB()
+	defer db.MustClose()
+	if err := db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucket([]byte("widgets"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Put([]byte("foo"), []byte("bar")); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Put([]byte("bar"), []byte("foo")); err != nil {
+			t.Fatal(err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("widgets"))
+		fooBytes := sha256.Sum256([]byte("foo"))
+		val, hash := b.GetKVH([]byte("foo"))
+		fmt.Println(val, hash)
+		barBytes := sha256.Sum256([]byte("bar"))
+		v := append(barBytes[:], fooBytes[:]...)
+		tmp := sha256.Sum256(v)
+		b.Cursor().First()
+		rootHash := b.GetRootHash()
+		v = tmp[:]
+		if !bytes.Equal(rootHash, tmp[:]) {
+			t.Fatalf("not equals")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -273,6 +273,28 @@ func (b *Bucket) Get(key []byte) []byte {
 	return v
 }
 
+func (b *Bucket) GetKVH(key []byte) ([]byte, []byte) {
+	k, v, h, flags := b.Cursor().seekKVH(key)
+
+	// Return nil if this is a bucket.
+	if (flags & bucketLeafFlag) != 0 {
+		return nil, nil
+	}
+
+	// If our target node isn't the same key as what's passed in then return nil.
+	if !bytes.Equal(key, k) {
+		return nil, nil
+	}
+	return v, h
+}
+
+func (b *Bucket) GetRootHash() []byte {
+	// if the rootNode is not Materialized
+
+	_, _, h := b.Cursor().FirstKVH()
+	return h
+}
+
 // Put sets the value for a key in the bucket.
 // If the key exist then its previous value will be overwritten.
 // Supplied value must remain valid for the life of the transaction.
@@ -595,7 +617,7 @@ func (b *Bucket) inlineable() bool {
 	// our threshold for inline bucket size.
 	var size = pageHeaderSize
 	for _, inode := range n.inodes {
-		size += leafPageElementSize + uintptr(len(inode.key)) + uintptr(len(inode.value))
+		size += leafPageElementSize + uintptr(len(inode.key)) + uintptr(len(inode.value)) + uintptr(len(inode.hash))
 
 		if inode.flags&bucketLeafFlag != 0 {
 			return false

@@ -1,6 +1,7 @@
 package bbolt
 
 import (
+	"crypto/sha256"
 	"testing"
 	"unsafe"
 )
@@ -40,11 +41,16 @@ func TestNode_read_LeafPage(t *testing.T) {
 
 	// Insert 2 elements at the beginning. sizeof(leafPageElement) == 16
 	nodes := (*[3]leafPageElement)(unsafe.Pointer(uintptr(unsafe.Pointer(page)) + unsafe.Sizeof(*page)))
-	nodes[0] = leafPageElement{flags: 0, pos: 32, ksize: 3, vsize: 4}  // pos = sizeof(leafPageElement) * 2
-	nodes[1] = leafPageElement{flags: 0, pos: 23, ksize: 10, vsize: 3} // pos = sizeof(leafPageElement) + 3 + 4
+	nodes[0] = leafPageElement{flags: 0, pos: 40, ksize: 3, vsize: 4, hashsize: 32}  // pos = sizeof(leafPageElement) * 2
+	nodes[1] = leafPageElement{flags: 0, pos: 59, ksize: 10, vsize: 3, hashsize: 32} // pos = sizeof(leafPageElement) + 3 + 4 +32
 
 	// Write data for the nodes at the end.
-	const s = "barfoozhelloworldbye"
+	b1, b2 := []byte("barfooz"), []byte("helloworldbye")
+	hash1, hash2 := sha256.Sum256(b1), sha256.Sum256(b2)
+	s := append(b1, hash1[:]...)
+	s = append(s, b2...)
+	s = append(s, hash2[:]...)
+
 	data := unsafeByteSlice(unsafe.Pointer(&nodes[2]), 0, 0, len(s))
 	copy(data, s)
 

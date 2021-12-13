@@ -14,6 +14,7 @@ type node struct {
 	unbalanced bool
 	spilled    bool
 	key        []byte
+	hash       []byte
 	pgid       pgid
 	parent     *node
 	children   nodes
@@ -41,7 +42,8 @@ func (n *node) size() int {
 	sz, elsz := pageHeaderSize, n.pageElementSize()
 	for i := 0; i < len(n.inodes); i++ {
 		item := &n.inodes[i]
-		sz += elsz + uintptr(len(item.key)) + uintptr(len(item.value))
+		// adding hash size
+		sz += elsz + uintptr(len(item.key)) + uintptr(len(item.value)) + uintptr(len(item.hash))
 	}
 	return int(sz)
 }
@@ -53,7 +55,7 @@ func (n *node) sizeLessThan(v uintptr) bool {
 	sz, elsz := pageHeaderSize, n.pageElementSize()
 	for i := 0; i < len(n.inodes); i++ {
 		item := &n.inodes[i]
-		sz += elsz + uintptr(len(item.key)) + uintptr(len(item.value))
+		sz += elsz + uintptr(len(item.key)) + uintptr(len(item.value)) + uintptr(len(item.hash))
 		if sz >= v {
 			return false
 		}
@@ -138,6 +140,16 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	inode.value = value
 	inode.pgid = pgid
 	_assert(len(inode.key) > 0, "put: zero-length inode key")
+
+	// update current node's hash
+	//UpdatingHash(index, n)
+
+	//// todo: updating parent hashing
+	//for n.parent != nil {
+	//	index := n.parent.childIndex(n)
+	//	n = n.parent
+	//	UpdatingHash(index, n)
+	//}
 }
 
 // del removes a key from the node.
@@ -152,9 +164,18 @@ func (n *node) del(key []byte) {
 
 	// Delete inode from the node.
 	n.inodes = append(n.inodes[:index], n.inodes[index+1:]...)
+	//update current node's hash
+	n.unbalanced = true
+
+	//UpdatingHash(index, n)
+
+	//for n.parent != nil {
+	//	index := n.parent.childIndex(n)
+	//	n = n.parent
+	//	UpdatingHash(index, n)
+	//}
 
 	// Mark the node as needing rebalancing.
-	n.unbalanced = true
 }
 
 // read initializes the node from a page.
@@ -170,10 +191,12 @@ func (n *node) read(p *page) {
 			inode.flags = elem.flags
 			inode.key = elem.key()
 			inode.value = elem.value()
+			inode.hash = elem.hash()
 		} else {
 			elem := p.branchPageElement(uint16(i))
 			inode.pgid = elem.pgid
 			inode.key = elem.key()
+			inode.hash = elem.hash()
 		}
 		_assert(len(inode.key) > 0, "read: zero-length inode key")
 	}
@@ -214,7 +237,7 @@ func (n *node) write(p *page) {
 
 		// Create a slice to write into of needed size and advance
 		// byte pointer for next iteration.
-		sz := len(item.key) + len(item.value)
+		sz := len(item.key) + len(item.value) + len(item.hash)
 		b := unsafeByteSlice(unsafe.Pointer(p), off, 0, sz)
 		off += uintptr(sz)
 
@@ -225,17 +248,20 @@ func (n *node) write(p *page) {
 			elem.flags = item.flags
 			elem.ksize = uint32(len(item.key))
 			elem.vsize = uint32(len(item.value))
+			elem.hashsize = uint32(len(item.hash))
 		} else {
 			elem := p.branchPageElement(uint16(i))
 			elem.pos = uint32(uintptr(unsafe.Pointer(&b[0])) - uintptr(unsafe.Pointer(elem)))
 			elem.ksize = uint32(len(item.key))
+			elem.hashsize = uint32(len(item.hash))
 			elem.pgid = item.pgid
 			_assert(elem.pgid != p.id, "write: circular dependency occurred")
 		}
 
 		// Write data for the element to the end of the page.
 		l := copy(b, item.key)
-		copy(b[l:], item.value)
+		v := copy(b[l:], item.value)
+		copy(b[l+v:], item.hash)
 	}
 
 	// DEBUG ONLY: n.dump()
@@ -315,7 +341,7 @@ func (n *node) splitIndex(threshold int) (index, sz uintptr) {
 	for i := 0; i < len(n.inodes)-minKeysPerPage; i++ {
 		index = uintptr(i)
 		inode := n.inodes[i]
-		elsize := n.pageElementSize() + uintptr(len(inode.key)) + uintptr(len(inode.value))
+		elsize := n.pageElementSize() + uintptr(len(inode.key)) + uintptr(len(inode.value)) + uintptr(len(inode.hash))
 
 		// If we have at least the minimum number of keys and adding another
 		// node would put us over the threshold then exit and return.
@@ -355,6 +381,11 @@ func (n *node) spill() error {
 	var nodes = n.split(uintptr(tx.db.pageSize))
 	for _, node := range nodes {
 		// Add node's page to the freelist if it's not new.
+		if node.isLeaf {
+			CalculatingHashing(n, true)
+		} else {
+			CalculatingHashing(n, false)
+		}
 		if node.pgid > 0 {
 			tx.db.freelist.free(tx.meta.txid, tx.page(node.pgid))
 			node.pgid = 0
@@ -394,9 +425,15 @@ func (n *node) spill() error {
 	// as well. We'll clear out the children to make sure it doesn't try to respill.
 	if n.parent != nil && n.parent.pgid == 0 {
 		n.children = nil
-		return n.parent.spill()
+		err := n.parent.spill()
+		if err != nil {
+			return err
+		}
 	}
-
+	// set hashing for parent node
+	if n.parent != nil {
+		CalculatingHashing(n.parent, false)
+	}
 	return nil
 }
 
@@ -535,6 +572,10 @@ func (n *node) dereference() {
 		value := make([]byte, len(inode.value))
 		copy(value, inode.value)
 		inode.value = value
+
+		hash := make([]byte, len(inode.hash))
+		copy(hash, inode.hash)
+		inode.hash = hash
 	}
 
 	// Recursively dereference children.
@@ -597,6 +638,7 @@ type inode struct {
 	pgid  pgid
 	key   []byte
 	value []byte
+	hash  []byte
 }
 
 type inodes []inode

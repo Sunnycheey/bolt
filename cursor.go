@@ -49,6 +49,27 @@ func (c *Cursor) First() (key []byte, value []byte) {
 
 }
 
+func (c *Cursor) FirstKVH() (key []byte, value []byte, hash []byte) {
+	_assert(c.bucket.tx.db != nil, "tx closed")
+	c.stack = c.stack[:0]
+	p, n := c.bucket.pageNode(c.bucket.root)
+	c.stack = append(c.stack, elemRef{page: p, node: n, index: 0})
+	c.first()
+
+	// If we land on an empty page then move to the next value.
+	// https://github.com/boltdb/bolt/issues/450
+	if c.stack[len(c.stack)-1].count() == 0 {
+		c.next()
+	}
+
+	k, v, h, flags := c.keyValueHash()
+	if (flags & uint32(bucketLeafFlag)) != 0 {
+		return k, nil, h
+	}
+	return k, v, h
+
+}
+
 // Last moves the cursor to the last item in the bucket and returns its key and value.
 // If the bucket is empty then a nil key and value are returned.
 // The returned key and value are only valid for the life of the transaction.
@@ -160,6 +181,17 @@ func (c *Cursor) seek(seek []byte) (key []byte, value []byte, flags uint32) {
 
 	// If this is a bucket then return a nil value.
 	return c.keyValue()
+}
+
+func (c *Cursor) seekKVH(seek []byte) (key []byte, value []byte, hash []byte, flags uint32) {
+	_assert(c.bucket.tx.db != nil, "tx closed")
+
+	// Start from root page/node and traverse to correct page.
+	c.stack = c.stack[:0]
+	c.search(seek, c.bucket.root)
+
+	// If this is a bucket then return a nil value.
+	return c.keyValueHash()
 }
 
 // first moves the cursor to the first leaf element under the last page in the stack.
@@ -348,6 +380,25 @@ func (c *Cursor) keyValue() ([]byte, []byte, uint32) {
 	// Or retrieve value from page.
 	elem := ref.page.leafPageElement(uint16(ref.index))
 	return elem.key(), elem.value(), elem.flags
+}
+
+func (c *Cursor) keyValueHash() ([]byte, []byte, []byte, uint32) {
+	ref := &c.stack[len(c.stack)-1]
+
+	// If the cursor is pointing to the end of page/node then return nil.
+	if ref.count() == 0 || ref.index >= ref.count() {
+		return nil, nil, nil, 0
+	}
+
+	// Retrieve value from node.
+	if ref.node != nil {
+		inode := &ref.node.inodes[ref.index]
+		return inode.key, inode.value, inode.hash, inode.flags
+	}
+
+	// Or retrieve value from page.
+	elem := ref.page.leafPageElement(uint16(ref.index))
+	return elem.key(), elem.value(), elem.hash(), elem.flags
 }
 
 // node returns the node that the cursor is currently positioned on.
