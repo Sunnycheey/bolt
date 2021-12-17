@@ -290,9 +290,12 @@ func (b *Bucket) GetKVH(key []byte) ([]byte, []byte) {
 
 func (b *Bucket) GetRootHash() []byte {
 	// if the rootNode is not Materialized
-
-	_, _, h := b.Cursor().FirstKVH()
-	return h
+	p, n := b.pageNode(b.root)
+	if n == nil {
+		n = &node{}
+	}
+	n.read(p)
+	return n.hash
 }
 
 // Put sets the value for a key in the bucket.
@@ -552,19 +555,20 @@ func (b *Bucket) spill() error {
 		// write it inline into the parent bucket's page. Otherwise spill it
 		// like a normal bucket and make the parent value a pointer to the page.
 		var value []byte
-		if child.inlineable() {
-			child.free()
-			value = child.write()
-		} else {
-			if err := child.spill(); err != nil {
-				return err
-			}
+		//if child.inlineable() {
+		//	child.free()
+		//	value = child.write()
+		//} else {
 
-			// Update the child bucket header in this bucket.
-			value = make([]byte, unsafe.Sizeof(bucket{}))
-			var bucket = (*bucket)(unsafe.Pointer(&value[0]))
-			*bucket = *child.bucket
+		if err := child.spill(); err != nil {
+			return err
 		}
+
+		// Update the child bucket header in this bucket.
+		value = make([]byte, unsafe.Sizeof(bucket{}))
+		var bucket = (*bucket)(unsafe.Pointer(&value[0]))
+		*bucket = *child.bucket
+		//}
 
 		// Skip writing the bucket if there are no materialized nodes.
 		if child.rootNode == nil {
@@ -600,6 +604,16 @@ func (b *Bucket) spill() error {
 	}
 	b.root = b.rootNode.pgid
 
+	return nil
+}
+
+func (b *Bucket) hashing() error {
+	for name, child := range b.buckets {
+		// If the child bucket is small enough and it has no child buckets then
+		// write it inline into the parent bucket's page. Otherwise spill it
+		// like a normal bucket and make the parent value a pointer to the page.
+		fmt.Println(name, child)
+	}
 	return nil
 }
 

@@ -163,6 +163,12 @@ func (tx *Tx) Commit() error {
 	}
 	tx.stats.SpillTime += time.Since(startTime)
 
+	// calculating hashing value for node in single bucket
+	//if err := tx.root.hashing(); err != nil {
+	//	tx.rollback()
+	//	return err
+	//}
+
 	// Free the old root bucket.
 	tx.meta.root.root = tx.root.root
 

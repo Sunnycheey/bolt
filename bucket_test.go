@@ -1971,11 +1971,8 @@ func TestBucket_GetRootHash(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := b.Put([]byte("foo"), []byte("bar")); err != nil {
-			t.Fatal(err)
-		}
-		if err := b.Put([]byte("bar"), []byte("foo")); err != nil {
-			t.Fatal(err)
+		for i := 0; i < 100; i++ {
+			b.Put([]byte(fmt.Sprintf("%v", i)), []byte(fmt.Sprintf("%v", i)))
 		}
 		return nil
 	}); err != nil {
@@ -1983,17 +1980,20 @@ func TestBucket_GetRootHash(t *testing.T) {
 	}
 	if err := db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("widgets"))
-		fooBytes := sha256.Sum256([]byte("foo"))
-		val, hash := b.GetKVH([]byte("foo"))
-		fmt.Println(val, hash)
-		barBytes := sha256.Sum256([]byte("bar"))
-		v := append(barBytes[:], fooBytes[:]...)
-		tmp := sha256.Sum256(v)
-		b.Cursor().First()
-		rootHash := b.GetRootHash()
-		v = tmp[:]
-		if !bytes.Equal(rootHash, tmp[:]) {
-			t.Fatalf("not equals")
+		hashingBytes := make([]byte, 0)
+		for i := 0; i < 100; i++ {
+			byte := []byte(fmt.Sprintf("%v", i))
+			v, h := b.GetKVH(byte)
+			tmp_h := sha256.Sum256(byte)
+			hashingBytes = append(hashingBytes, tmp_h[:]...)
+			if !bytes.Equal(v, byte) || !bytes.Equal(h, tmp_h[:]) {
+				t.Fatalf("Not Equal")
+			}
+		}
+		bh := b.GetRootHash()
+		hashing := sha256.Sum256(hashingBytes)
+		if !bytes.Equal(bh, hashing[:]) {
+			t.Fatalf("Not Equal")
 		}
 		return nil
 	}); err != nil {

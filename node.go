@@ -2,6 +2,7 @@ package bbolt
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"unsafe"
@@ -138,6 +139,8 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	inode.flags = flags
 	inode.key = newKey
 	inode.value = value
+	hash := sha256.Sum256(value)
+	inode.hash = hash[:]
 	inode.pgid = pgid
 	_assert(len(inode.key) > 0, "put: zero-length inode key")
 
@@ -183,7 +186,7 @@ func (n *node) read(p *page) {
 	n.pgid = p.id
 	n.isLeaf = ((p.flags & leafPageFlag) != 0)
 	n.inodes = make(inodes, int(p.count))
-
+	n.hash = p.hash()
 	for i := 0; i < int(p.count); i++ {
 		inode := &n.inodes[i]
 		if n.isLeaf {
@@ -231,7 +234,11 @@ func (n *node) write(p *page) {
 
 	// Loop over each item and write it to the page.
 	// off tracks the offset into p of the start of the next data.
-	off := unsafe.Sizeof(*p) + n.pageElementSize()*uintptr(len(n.inodes))
+	off := unsafe.Sizeof(*p)
+	b := unsafeByteSlice(unsafe.Pointer(p), off, 0, 32)
+	copy(b, n.hash)
+	off += n.pageElementSize()*uintptr(len(n.inodes)) + hashSize
+
 	for i, item := range n.inodes {
 		_assert(len(item.key) > 0, "write: zero-length inode key")
 
@@ -376,16 +383,17 @@ func (n *node) spill() error {
 
 	// We no longer need the child list because it's only used for spill tracking.
 	n.children = nil
-
 	// Split nodes into appropriate sizes. The first node will always be n.
 	var nodes = n.split(uintptr(tx.db.pageSize))
 	for _, node := range nodes {
 		// Add node's page to the freelist if it's not new.
-		if node.isLeaf {
-			CalculatingHashing(n, true)
-		} else {
-			CalculatingHashing(n, false)
-		}
+		// in case of inline page. Warning: key shouldn't have the same name with bucket
+		actualNode := node
+		//actualBucket := n.bucket.Bucket(n.inodes[0].key)
+		//if actualBucket != nil {
+		//	actualNode = actualBucket.rootNode
+		//}
+		CalculatingHashing(actualNode)
 		if node.pgid > 0 {
 			tx.db.freelist.free(tx.meta.txid, tx.page(node.pgid))
 			node.pgid = 0
@@ -403,6 +411,7 @@ func (n *node) spill() error {
 		}
 		node.pgid = p.id
 		node.write(p)
+		//fmt.Printf("line 414: %v", node.hash)
 		node.spilled = true
 
 		// Insert into parent inodes.
@@ -432,7 +441,7 @@ func (n *node) spill() error {
 	}
 	// set hashing for parent node
 	if n.parent != nil {
-		CalculatingHashing(n.parent, false)
+		CalculatingHashing(n.parent)
 	}
 	return nil
 }
