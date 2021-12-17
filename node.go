@@ -155,6 +155,44 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	//}
 }
 
+func (n *node) putHash(oldKey, newKey, value []byte, hash []byte, pgid pgid, flags uint32) {
+	if pgid >= n.bucket.tx.meta.pgid {
+		panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", pgid, n.bucket.tx.meta.pgid))
+	} else if len(oldKey) <= 0 {
+		panic("put: zero-length old key")
+	} else if len(newKey) <= 0 {
+		panic("put: zero-length new key")
+	}
+
+	// Find insertion index.
+	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, oldKey) != -1 })
+
+	// Add capacity and shift nodes if we don't have an exact match and need to insert.
+	exact := (len(n.inodes) > 0 && index < len(n.inodes) && bytes.Equal(n.inodes[index].key, oldKey))
+	if !exact {
+		n.inodes = append(n.inodes, inode{})
+		copy(n.inodes[index+1:], n.inodes[index:])
+	}
+
+	inode := &n.inodes[index]
+	inode.flags = flags
+	inode.key = newKey
+	inode.value = value
+	inode.hash = hash
+	inode.pgid = pgid
+	_assert(len(inode.key) > 0, "put: zero-length inode key")
+
+	// update current node's hash
+	//UpdatingHash(index, n)
+
+	//// todo: updating parent hashing
+	//for n.parent != nil {
+	//	index := n.parent.childIndex(n)
+	//	n = n.parent
+	//	UpdatingHash(index, n)
+	//}
+}
+
 // del removes a key from the node.
 func (n *node) del(key []byte) {
 	// Find index of key.
@@ -383,6 +421,7 @@ func (n *node) spill() error {
 
 	// We no longer need the child list because it's only used for spill tracking.
 	n.children = nil
+
 	// Split nodes into appropriate sizes. The first node will always be n.
 	var nodes = n.split(uintptr(tx.db.pageSize))
 	for _, node := range nodes {
@@ -411,7 +450,6 @@ func (n *node) spill() error {
 		}
 		node.pgid = p.id
 		node.write(p)
-		//fmt.Printf("line 414: %v", node.hash)
 		node.spilled = true
 
 		// Insert into parent inodes.
@@ -420,8 +458,8 @@ func (n *node) spill() error {
 			if key == nil {
 				key = node.inodes[0].key
 			}
-
-			node.parent.put(key, node.inodes[0].key, nil, node.pgid, 0)
+			// we need to update parent hash
+			node.parent.putHash(key, node.inodes[0].key, nil, node.hash, node.pgid, 0)
 			node.key = node.inodes[0].key
 			_assert(len(node.key) > 0, "spill: zero-length node key")
 		}

@@ -584,6 +584,7 @@ func (b *Bucket) spill() error {
 		if flags&bucketLeafFlag == 0 {
 			panic(fmt.Sprintf("unexpected bucket header flag: %x", flags))
 		}
+		// whether to keep bucket hash
 		c.node().put([]byte(name), []byte(name), value, 0, bucketLeafFlag)
 	}
 
@@ -604,16 +605,6 @@ func (b *Bucket) spill() error {
 	}
 	b.root = b.rootNode.pgid
 
-	return nil
-}
-
-func (b *Bucket) hashing() error {
-	for name, child := range b.buckets {
-		// If the child bucket is small enough and it has no child buckets then
-		// write it inline into the parent bucket's page. Otherwise spill it
-		// like a normal bucket and make the parent value a pointer to the page.
-		fmt.Println(name, child)
-	}
 	return nil
 }
 
